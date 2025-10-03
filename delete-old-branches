@@ -21,6 +21,22 @@ export GITHUB_TOKEN=${INPUT_REPO_TOKEN}
 echo "was_dry_run=${DRY_RUN}" >> "$GITHUB_OUTPUT"
 
 deleted_branches=()
+error_branches=()
+
+# Function to output final results
+output_results() {
+    echo ""
+    echo "====== FINAL RESULTS ======"
+    echo "Successfully deleted branches (${#deleted_branches[@]}): ${deleted_branches[*]}"
+    echo "Branches with errors (${#error_branches[@]}): ${error_branches[*]}"
+    echo "deleted_branches=${deleted_branches[*]}" >> "$GITHUB_OUTPUT"
+    echo "error_branches=${error_branches[*]}" >> "$GITHUB_OUTPUT"
+    echo "deleted_count=${#deleted_branches[@]}" >> "$GITHUB_OUTPUT"
+    echo "error_count=${#error_branches[@]}" >> "$GITHUB_OUTPUT"
+}
+
+# Set up signal handlers to output results on early exit
+trap 'echo "Script interrupted. Outputting results collected so far..."; output_results; exit 130' INT TERM
 
 default_branch_protected() {
     local br=${1}
@@ -82,7 +98,6 @@ is_pr_open_on_branch() {
 
 delete_branch_or_tag() {
     local br=${1} ref="${2}" sha="${3}"
-    deleted_branches+=("${br}")
 
     echo "Deleting: ${br}"
     echo "To recreate run: git branch '${br}' '${sha}'"
@@ -90,14 +105,19 @@ delete_branch_or_tag() {
         status=$(gh api --method DELETE "repos/${REPO}/git/refs/${ref}/${br}" &> debug.log && echo ok || echo failed)
 
         case ${status} in
-            ok) ;;
-            *)  echo "Deletion of branch ${br} failed with http_status=${status}"
+            ok)
+                deleted_branches+=("${br}")
+                ;;
+            *)
+                echo "Deletion of branch ${br} failed with http_status=${status}"
                 echo "===== Dumping log ====="
                 [[ -f debug.log ]] && cat debug.log
+                error_branches+=("${br}:delete_failed")
                 ;;
         esac
     else
         echo "dry-run mode. Nothing changed!"
+        deleted_branches+=("${br}")
     fi
 }
 
@@ -105,10 +125,36 @@ main() {
     # fetch history etc
     local sha
     git config --global --add safe.directory "${GITHUB_WORKSPACE}"
-    git fetch --prune --unshallow --tags
+
+    # catch error for git fetch with --unshallow if complete repo clone
+    if ! git fetch --prune --unshallow --tags origin '+refs/heads/*:refs/remotes/origin/*'; then
+        echo "Error: Failed to fetch branches and tags. This is likely because the repository is a complete clone."
+
+        echo "Re-fetching without --unshallow..."
+        git fetch --prune --tags origin '+refs/heads/*:refs/remotes/origin/*'
+    fi
+    echo "Checking branches..."
     for br in $(git ls-remote -q --heads --refs | sed "s@^.*heads/@@"); do
-        if [[ -z "$(git log --oneline -1 --since="${DATE}" origin/"${br}")" ]]; then
-            sha=$(git show-ref -s "origin/${br}")
+
+        # Check if branch exists in origin and has no recent commits
+        if ! git_log_output=$(git log --oneline -1 --since="${DATE}" "origin/${br}" 2>/dev/null); then
+            echo "Error: Branch ${br} does not exist in remote repository or cannot be accessed. Skipping..."
+            error_branches+=("${br}:missing_or_inaccessible")
+            continue
+        fi
+
+        if [[ -z "${git_log_output}" ]]; then
+            # Get SHA for the branch, with error handling
+            if ! sha=$(git show-ref -s "origin/${br}" 2>/dev/null); then
+                echo "Error: Failed to fetch SHA for branch: ${br}. Branch may not exist in remote repository. Skipping..."
+                error_branches+=("${br}:no_sha")
+                continue
+            fi
+            if [[ -z "${sha}" ]]; then
+                echo "Error: Empty SHA for branch: ${br}. Skipping..."
+                error_branches+=("${br}:empty_sha")
+                continue
+            fi
             default_branch_protected "${br}" && echo "branch: ${br} is a default branch. Won't delete it" && continue
             branch_protected "${br}" && echo "branch: ${br} is likely protected. Won't delete it" && continue
             extra_branch_or_tag_protected "${br}" "branch" && echo "branch: ${br} is explicitly protected and won't be deleted" && continue
@@ -116,7 +162,6 @@ main() {
             delete_branch_or_tag "${br}" "heads" "${sha}"
         fi
     done
-    echo "deleted_branches=${deleted_branches[*]}" >> "$GITHUB_OUTPUT"
     if [[ "${DELETE_TAGS}" == true ]]; then
         local tag_counter=1
         for br in $(git ls-remote -q --tags --refs | sed "s@^.*tags/@@" | sort -Vr); do
@@ -131,6 +176,9 @@ main() {
             fi
         done
     fi
+
+    # Output final results
+    output_results
 }
 
 main "$@"
