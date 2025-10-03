@@ -125,7 +125,7 @@ main() {
     # fetch history etc
     local sha
     git config --global --add safe.directory "${GITHUB_WORKSPACE}"
-    echo "Fetching branches and tags..."
+
     # catch error for git fetch with --unshallow if complete repo clone
     if ! git fetch --prune --unshallow --tags origin '+refs/heads/*:refs/remotes/origin/*'; then
         echo "Error: Failed to fetch branches and tags. This is likely because the repository is a complete clone."
