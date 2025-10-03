@@ -135,8 +135,26 @@ main() {
     fi
     echo "Checking branches..."
     for br in $(git ls-remote -q --heads --refs | sed "s@^.*heads/@@"); do
-        if [[ -z "$(git log --oneline -1 --since="${DATE}" origin/"${br}")" ]]; then
-            sha=$(git show-ref -s "origin/${br}")
+
+        # Check if branch exists in origin and has no recent commits
+        if ! git_log_output=$(git log --oneline -1 --since="${DATE}" "origin/${br}" 2>/dev/null); then
+            echo "Error: Branch ${br} does not exist in remote repository or cannot be accessed. Skipping..."
+            error_branches+=("${br}:missing_or_inaccessible")
+            continue
+        fi
+
+        if [[ -z "${git_log_output}" ]]; then
+            # Get SHA for the branch, with error handling
+            if ! sha=$(git show-ref -s "origin/${br}" 2>/dev/null); then
+                echo "Error: Failed to fetch SHA for branch: ${br}. Branch may not exist in remote repository. Skipping..."
+                error_branches+=("${br}:no_sha")
+                continue
+            fi
+            if [[ -z "${sha}" ]]; then
+                echo "Error: Empty SHA for branch: ${br}. Skipping..."
+                error_branches+=("${br}:empty_sha")
+                continue
+            fi
             default_branch_protected "${br}" && echo "branch: ${br} is a default branch. Won't delete it" && continue
             branch_protected "${br}" && echo "branch: ${br} is likely protected. Won't delete it" && continue
             extra_branch_or_tag_protected "${br}" "branch" && echo "branch: ${br} is explicitly protected and won't be deleted" && continue
