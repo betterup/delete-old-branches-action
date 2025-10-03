@@ -21,6 +21,22 @@ export GITHUB_TOKEN=${INPUT_REPO_TOKEN}
 echo "was_dry_run=${DRY_RUN}" >> "$GITHUB_OUTPUT"
 
 deleted_branches=()
+error_branches=()
+
+# Function to output final results
+output_results() {
+    echo ""
+    echo "====== FINAL RESULTS ======"
+    echo "Successfully deleted branches (${#deleted_branches[@]}): ${deleted_branches[*]}"
+    echo "Branches with errors (${#error_branches[@]}): ${error_branches[*]}"
+    echo "deleted_branches=${deleted_branches[*]}" >> "$GITHUB_OUTPUT"
+    echo "error_branches=${error_branches[*]}" >> "$GITHUB_OUTPUT"
+    echo "deleted_count=${#deleted_branches[@]}" >> "$GITHUB_OUTPUT"
+    echo "error_count=${#error_branches[@]}" >> "$GITHUB_OUTPUT"
+}
+
+# Set up signal handlers to output results on early exit
+trap 'echo "Script interrupted. Outputting results collected so far..."; output_results; exit 130' INT TERM
 
 default_branch_protected() {
     local br=${1}
@@ -82,7 +98,6 @@ is_pr_open_on_branch() {
 
 delete_branch_or_tag() {
     local br=${1} ref="${2}" sha="${3}"
-    deleted_branches+=("${br}")
 
     echo "Deleting: ${br}"
     echo "To recreate run: git branch '${br}' '${sha}'"
@@ -90,14 +105,19 @@ delete_branch_or_tag() {
         status=$(gh api --method DELETE "repos/${REPO}/git/refs/${ref}/${br}" &> debug.log && echo ok || echo failed)
 
         case ${status} in
-            ok) ;;
-            *)  echo "Deletion of branch ${br} failed with http_status=${status}"
+            ok)
+                deleted_branches+=("${br}")
+                ;;
+            *)
+                echo "Deletion of branch ${br} failed with http_status=${status}"
                 echo "===== Dumping log ====="
                 [[ -f debug.log ]] && cat debug.log
+                error_branches+=("${br}:delete_failed")
                 ;;
         esac
     else
         echo "dry-run mode. Nothing changed!"
+        deleted_branches+=("${br}")
     fi
 }
 
@@ -116,7 +136,6 @@ main() {
             delete_branch_or_tag "${br}" "heads" "${sha}"
         fi
     done
-    echo "deleted_branches=${deleted_branches[*]}" >> "$GITHUB_OUTPUT"
     if [[ "${DELETE_TAGS}" == true ]]; then
         local tag_counter=1
         for br in $(git ls-remote -q --tags --refs | sed "s@^.*tags/@@" | sort -Vr); do
@@ -131,6 +150,9 @@ main() {
             fi
         done
     fi
+
+    # Output final results
+    output_results
 }
 
 main "$@"
