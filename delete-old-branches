@@ -85,15 +85,9 @@ is_pr_open_on_branch() {
     fi
 
     local br=${1}
-    open_prs_branches=$(gh api "repos/${REPO}/pulls" --jq '.[].head.ref' --paginate)
-
-    for pr_br in ${open_prs_branches}; do
-      if [[ "${pr_br}" == "${br}" ]]; then
-          return 0
-      fi
-    done
-
-    return 1
+    # Check against cached open PR branches instead of making API calls
+    echo "${OPEN_PR_BRANCHES}" | grep -qx "${br}"
+    return $?
 }
 
 delete_branch_or_tag() {
@@ -133,6 +127,17 @@ main() {
         echo "Re-fetching without --unshallow..."
         git fetch --prune --tags origin '+refs/heads/*:refs/remotes/origin/*'
     fi
+
+    # Fetch all open PR branches once
+    echo "Fetching open PR branches..."
+    if [[ "${EXCLUDE_OPEN_PR_BRANCHES}" == true ]]; then
+        OPEN_PR_BRANCHES=$(gh api "repos/${REPO}/pulls" --jq '.[].head.ref' --paginate)
+        local pr_count=$(echo "${OPEN_PR_BRANCHES}" | grep -c '^' || echo 0)
+        echo "Found ${pr_count} branches with open PRs"
+    else
+        OPEN_PR_BRANCHES=""
+    fi
+
     echo "Checking branches..."
     for br in $(git ls-remote -q --heads --refs | sed "s@^.*heads/@@"); do
 
