@@ -120,6 +120,10 @@ main() {
     local sha
     git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
+    # Configure git to use the GITHUB_TOKEN for authentication
+    # This is needed because the Docker container doesn't inherit the host's git credentials
+    git config --global url."https://x-access-token:${INPUT_REPO_TOKEN}@github.com/".insteadOf "https://github.com/"
+
     # catch error for git fetch with --unshallow if complete repo clone
     if ! git fetch --prune --unshallow --no-tags origin '+refs/heads/*:refs/remotes/origin/*'; then
         echo "Error: Failed to fetch branches with --unshallow. This is likely because the repository is a complete clone."
