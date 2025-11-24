@@ -121,11 +121,17 @@ main() {
     git config --global --add safe.directory "${GITHUB_WORKSPACE}"
 
     # catch error for git fetch with --unshallow if complete repo clone
-    if ! git fetch --prune --unshallow --tags origin '+refs/heads/*:refs/remotes/origin/*'; then
-        echo "Error: Failed to fetch branches and tags. This is likely because the repository is a complete clone."
+    if ! git fetch --prune --unshallow --no-tags origin '+refs/heads/*:refs/remotes/origin/*'; then
+        echo "Error: Failed to fetch branches with --unshallow. This is likely because the repository is a complete clone."
 
-        echo "Re-fetching without --unshallow..."
-        git fetch --prune --tags origin '+refs/heads/*:refs/remotes/origin/*'
+        echo "Re-fetching without --unshallow and without tags for speed..."
+        git fetch --prune --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+    fi
+
+    # Only fetch tags if we need them for tag deletion
+    if [[ "${DELETE_TAGS}" == true ]]; then
+        echo "Fetching tags (required for tag deletion)..."
+        git fetch --prune --tags origin
     fi
 
     # Fetch all open PR branches once
