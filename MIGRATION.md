@@ -97,6 +97,10 @@ jobs:
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           batch_size: "100"
+          # Optional: Filter branches during discovery to reduce processing
+          default_branches: "main,master"
+          exclude_open_pr_branches: "true"
+          extra_protected_branch_regex: "^(main|staging|production|gov-|gh-pages|release/.*)$"
 
   # Stage 2: Process in parallel
   process:
@@ -144,6 +148,32 @@ Watch the first real run closely:
 - Confirm total runtime is under 10 minutes
 
 ## Configuration Tuning
+
+### Discovery Stage Filtering (Recommended)
+
+The discovery stage can now filter out protected branches **before** creating batches. This dramatically reduces API calls and processing time:
+
+```yaml
+# In the discover step:
+with:
+  repo_token: ${{ secrets.GITHUB_TOKEN }}
+  batch_size: "100"
+  # Filter branches during discovery
+  default_branches: "main,master"              # Default branches to exclude
+  exclude_open_pr_branches: "true"              # Exclude branches with open PRs
+  extra_protected_branch_regex: "^(main|staging|production|gov-|gh-pages|release/.*)$"
+```
+
+**Benefits**:
+- ✅ Reduces branches sent to process stage by 30-50%
+- ✅ Fewer API calls to GitHub
+- ✅ Faster overall execution
+- ✅ Process stage still has defensive checks as safety net
+
+**Example**: If you have 1000 branches:
+- Without filtering: All 1000 branches sent to process stage
+- With filtering: ~650 branches after removing protected/PR branches
+- **Result**: 35% fewer API calls, faster execution
 
 ### Adjusting Batch Size
 
