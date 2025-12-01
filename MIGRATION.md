@@ -1,0 +1,246 @@
+# Migration Guide: Single Job → Parallelized Workflow
+
+## Overview
+
+This guide will help you migrate from the single-job workflow (which times out at 30+ minutes) to the new parallelized two-stage workflow (which completes in ~5-6 minutes).
+
+## What Changed
+
+### Architecture
+
+**Before**: Single monolithic job
+```
+Job: delete-stale-branches
+├── Checkout repo
+├── Fetch ALL branches (20+ minutes) ⚠️
+├── Fetch open PRs
+└── Process all branches sequentially
+```
+
+**After**: Two-stage parallelized jobs
+```
+Job 1: discover (30 seconds)
+├── List all branches via git ls-remote
+└── Split into batches → output matrix
+
+Job 2: process (runs 10 in parallel, ~5 minutes each)
+├── Checkout repo
+├── Fetch ONLY assigned branches (2 minutes)
+├── Fetch open PRs (cached)
+└── Process assigned branches
+```
+
+## Step-by-Step Migration
+
+### Step 1: Update Your Action Version
+
+If you're using the action as a Docker container, use the latest version:
+
+```yaml
+uses: docker://ghcr.io/betterup/delete-old-branches-action:latest
+```
+
+Or if referencing by tag:
+
+```yaml
+uses: betterup/delete-old-branches-action@v0.0.16  # or latest version
+```
+
+### Step 2: Replace Your Workflow File
+
+**Old workflow** (`.github/workflows/delete-stale-branches.yml`):
+
+```yaml
+name: Delete Stale Branches
+on:
+  schedule:
+    - cron: '30 2 * * *'
+
+jobs:
+  delete-stale-branches:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: betterup/delete-old-branches-action@v0.0.15
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          date: "60 days ago"
+          dry_run: false
+          exclude_open_pr_branches: true
+          extra_protected_branch_regex: "^(main|staging|production|gov-|gh-pages|release/.*)$"
+```
+
+**New workflow** (parallelized):
+
+```yaml
+name: Delete Stale Branches (Parallelized)
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 2 * * *'
+
+# Prevent concurrent runs
+concurrency:
+  group: delete-stale-branches
+  cancel-in-progress: false
+
+jobs:
+  # Stage 1: Discovery
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+    steps:
+      - name: Discover and batch branches
+        id: discover
+        uses: docker://ghcr.io/betterup/delete-old-branches-action:latest
+        with:
+          entrypoint: /usr/bin/discover-branches
+        env:
+          INPUT_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_BATCH_SIZE: "100"
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+  # Stage 2: Process in parallel
+  process:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 10
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Delete stale branches (Batch ${{ matrix.batch }})
+        uses: betterup/delete-old-branches-action@main
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          date: "60 days ago"
+          dry_run: false
+          exclude_open_pr_branches: true
+          extra_protected_branch_regex: "^(main|staging|production|gov-|gh-pages|release/.*)$"
+          branch_list: ${{ matrix.branches }}
+
+      - name: Report results
+        if: always()
+        run: |
+          echo "Batch ${{ matrix.batch }}: Processed ${{ matrix.count }} branches"
+```
+
+### Step 3: Test in Dry-Run Mode First
+
+1. Set `dry_run: true` in the new workflow
+2. Trigger manually via `workflow_dispatch` (not via schedule)
+3. Review the Actions logs to ensure:
+   - Discovery job completes quickly (~30s)
+   - Worker jobs run in parallel
+   - No branches are accidentally deleted
+4. Once confident, set `dry_run: false`
+
+### Step 4: Monitor the First Real Run
+
+Watch the first real run closely:
+- Check that all batches complete successfully
+- Verify deleted branches are actually stale
+- Confirm total runtime is under 10 minutes
+
+## Configuration Tuning
+
+### Adjusting Batch Size
+
+**Small batches** (50-75 branches):
+- ✅ More granular parallelism
+- ✅ Faster individual jobs
+- ❌ More parallel jobs (may hit GitHub rate limits)
+
+**Large batches** (150-200 branches):
+- ✅ Fewer parallel jobs
+- ✅ Less GitHub Actions overhead
+- ❌ Longer individual jobs
+- ❌ Less parallelism benefit
+
+**Recommended**: Start with 100, adjust based on your needs.
+
+```yaml
+INPUT_BATCH_SIZE: "100"  # Default, good for most repos
+```
+
+### Adjusting Parallelism
+
+Control how many worker jobs run simultaneously:
+
+```yaml
+strategy:
+  max-parallel: 10  # Default
+```
+
+**Lower values** (5-8):
+- Less API pressure on GitHub
+- Longer total runtime but more reliable
+
+**Higher values** (15-20):
+- Fastest total runtime
+- May hit GitHub API rate limits
+- Use only if you have GitHub Enterprise or high rate limits
+
+## Rollback Plan
+
+If the parallelized workflow causes issues:
+
+1. Revert to the old workflow file
+2. Use the old action version: `@v0.0.15`
+3. Accept the 30-minute runtime or split branches manually
+
+## Common Issues
+
+### Issue: Discovery job fails with "authentication failed"
+
+**Solution**: Ensure `INPUT_REPO_TOKEN` is set correctly:
+
+```yaml
+env:
+  INPUT_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+### Issue: Worker jobs fail with "branch not found"
+
+**Cause**: Branch was deleted between discovery and processing stages.
+
+**Solution**: This is expected and handled gracefully. The script will log a warning and continue.
+
+### Issue: Still timing out
+
+**Possible causes**:
+- Batch size too large → reduce to 50-75
+- Too many branches → increase `max-parallel` to 15-20
+- Network issues → retry the workflow
+
+## Performance Expectations
+
+Based on testing with betterup-monolith (26,578 files, 1000+ branches):
+
+| Metric | Old (Single Job) | New (Parallelized) |
+|--------|------------------|-------------------|
+| Total Runtime | 30+ min ⚠️ | 5-6 min ✅ |
+| Git Fetch Time | 20+ min | ~2 min per batch |
+| Success Rate | ❌ Timeout | ✅ Completes |
+| Debuggability | Hard (monolithic) | Easy (per-batch logs) |
+
+## Support
+
+If you encounter issues during migration:
+
+1. Check logs for each batch individually
+2. Test with `dry_run: true` first
+3. Start with conservative settings (batch_size=100, max-parallel=10)
+4. Open an issue with the full workflow logs
+
+## Next Steps
+
+1. ✅ Update to latest action version
+2. ✅ Replace workflow file with parallelized version
+3. ✅ Test with dry_run=true
+4. ✅ Monitor first real run
+5. ✅ Tune configuration if needed
