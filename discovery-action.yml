@@ -1,0 +1,19 @@
+# discovery-action.yml
+name: "Discover branches for batching"
+description: "Discover all branches and split them into batches for parallel processing"
+author: "Markos Chandras / Modified for parallelization"
+inputs:
+  repo_token:
+    description: "The GITHUB_TOKEN secret"
+    required: true
+  batch_size:
+    description: "Number of branches per batch"
+    required: false
+    default: "100"
+outputs:
+  matrix:
+    description: "JSON matrix configuration for parallel job execution"
+runs:
+  using: "docker"
+  image: "Dockerfile"
+  entrypoint: "/usr/bin/discover-branches"

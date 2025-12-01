@@ -14,6 +14,7 @@ DEFAULT_BRANCHES=${INPUT_DEFAULT_BRANCHES:-main,master}
 EXCLUDE_BRANCH_REGEX=${INPUT_EXTRA_PROTECTED_BRANCH_REGEX:-^$}
 EXCLUDE_TAG_REGEX=${INPUT_EXTRA_PROTECTED_TAG_REGEX:-^$}
 EXCLUDE_OPEN_PR_BRANCHES=${INPUT_EXCLUDE_OPEN_PR_BRANCHES:-true}
+BRANCH_LIST=${INPUT_BRANCH_LIST:-}
 
 # used for GitHub CLI authentication
 export GITHUB_TOKEN=${INPUT_REPO_TOKEN}
@@ -124,12 +125,32 @@ main() {
     # This is needed because the Docker container doesn't inherit the host's git credentials
     git config --global url."https://x-access-token:${INPUT_REPO_TOKEN}@github.com/".insteadOf "https://github.com/"
 
-    # catch error for git fetch with --unshallow if complete repo clone
-    if ! git fetch --prune --unshallow --no-tags origin '+refs/heads/*:refs/remotes/origin/*'; then
-        echo "Error: Failed to fetch branches with --unshallow. This is likely because the repository is a complete clone."
+    # Determine which branches to process
+    local branches_to_process
+    if [[ -n "${BRANCH_LIST}" ]]; then
+        echo "Processing specific branch list (batch mode)..."
+        branches_to_process="${BRANCH_LIST}"
 
-        echo "Re-fetching without --unshallow and without tags for speed..."
-        git fetch --prune --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+        # In batch mode, only fetch the specific branches we need
+        echo "Fetching ${branches_to_process} from remote..."
+        for br in ${branches_to_process}; do
+            echo "  Fetching branch: ${br}"
+            if ! git fetch --no-tags origin "refs/heads/${br}:refs/remotes/origin/${br}" 2>/dev/null; then
+                echo "  Warning: Failed to fetch ${br}, it may have been deleted"
+            fi
+        done
+    else
+        echo "Processing all branches (legacy mode)..."
+        # catch error for git fetch with --unshallow if complete repo clone
+        if ! git fetch --prune --unshallow --no-tags origin '+refs/heads/*:refs/remotes/origin/*'; then
+            echo "Error: Failed to fetch branches with --unshallow. This is likely because the repository is a complete clone."
+
+            echo "Re-fetching without --unshallow and without tags for speed..."
+            git fetch --prune --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+        fi
+
+        # Get all branches from ls-remote
+        branches_to_process=$(git ls-remote -q --heads --refs | sed "s@^.*heads/@@")
     fi
 
     # Only fetch tags if we need them for tag deletion
@@ -149,7 +170,7 @@ main() {
     fi
 
     echo "Checking branches..."
-    for br in $(git ls-remote -q --heads --refs | sed "s@^.*heads/@@"); do
+    for br in ${branches_to_process}; do
 
         # Check if branch exists in origin and has no recent commits
         if ! git_log_output=$(git log --oneline -1 --since="${DATE}" "origin/${br}" 2>/dev/null); then

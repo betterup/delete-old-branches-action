@@ -47,4 +47,99 @@ jobs:
 
 Once you are happy switch, `dry_run` to `false` so the action actually does the job
 
+## Parallelized Workflow for Large Repositories
+
+For repositories with many branches (1000+) that are hitting the 30-minute GitHub Actions timeout, you can use the **parallelized two-stage workflow** approach:
+
+### How It Works
+
+1. **Discovery Stage**: A fast job that lists all branches using `git ls-remote` (no fetch needed) and splits them into batches
+2. **Processing Stage**: Multiple parallel jobs that each process a batch of branches
+
+This approach dramatically reduces execution time by:
+- Avoiding the massive git fetch of all branches in a single job
+- Each worker job only fetches the specific branches it needs to process
+- Processing branches in parallel (up to 10 jobs by default)
+
+### Example Parallelized Workflow
+
+```yaml
+name: Delete Stale Branches (Parallelized)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 2 * * *'
+
+concurrency:
+  group: delete-stale-branches
+  cancel-in-progress: false
+
+jobs:
+  # Stage 1: Discover branches and create batches
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+    steps:
+      - name: Discover branches
+        id: discover
+        uses: docker://ghcr.io/betterup/delete-old-branches-action:latest
+        with:
+          entrypoint: /usr/bin/discover-branches
+        env:
+          INPUT_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_BATCH_SIZE: "100"  # Branches per batch
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+  # Stage 2: Process branches in parallel
+  process:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 10          # Number of parallel jobs
+      fail-fast: false          # Continue even if one batch fails
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Delete stale branches (Batch ${{ matrix.batch }})
+        uses: betterup/delete-old-branches-action@main
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          date: "60 days ago"
+          dry_run: false
+          exclude_open_pr_branches: true
+          extra_protected_branch_regex: "^(main|staging|production|release/.*)$"
+          branch_list: ${{ matrix.branches }}  # Process only this batch
+```
+
+### Configuration Options
+
+- **`INPUT_BATCH_SIZE`**: Number of branches per batch (default: 100). Larger batches = fewer parallel jobs but longer per job.
+- **`max-parallel`**: Maximum number of parallel worker jobs (default: 10). Higher values = faster but more resource usage.
+- **`branch_list`**: Space-separated list of branches to process in batch mode. Automatically set by the discovery job.
+
+### Performance Comparison
+
+**Before (Single Job)**:
+- Fetch all branches: ~20 minutes
+- Process branches: ~10 minutes
+- **Total: 30+ minutes** ⚠️ Timeout
+
+**After (Parallelized with 10 workers)**:
+- Discovery: ~30 seconds
+- Each worker fetches ~100 branches: ~2 minutes
+- Each worker processes ~100 branches: ~3 minutes
+- **Total: ~5-6 minutes** ✅ 5x faster
+
+### When to Use Parallelization
+
+- ✅ Repository has 1000+ branches
+- ✅ Single-job workflow times out (>30 minutes)
+- ✅ git fetch operations are slow
+- ❌ Repository has <500 branches (overhead not worth it)
+- ❌ You need strict ordering of branch deletions
+
 Happy cleaning!
