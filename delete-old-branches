@@ -143,12 +143,14 @@ main() {
 
     # Convert DATE input to epoch once before the loop
     echo "Converting cutoff date: ${DATE}"
-    cutoff_epoch=$(date -d "${DATE}" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "${DATE}" +%s 2>/dev/null)
+    cutoff_epoch=$(date -d "${DATE}" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "${DATE}" +%s 2>/dev/null || echo "")
     if [[ -z "${cutoff_epoch}" ]]; then
         echo "Error: Failed to parse date '${DATE}'. Please use a format like '60 days ago' or 'YYYY-MM-DD'"
         exit 1
     fi
-    echo "Cutoff epoch: ${cutoff_epoch} ($(date -d "@${cutoff_epoch}" 2>/dev/null || date -r "${cutoff_epoch}" 2>/dev/null))"
+    # Display the parsed cutoff date (try both GNU and BSD date formats)
+    cutoff_date_display=$(date -d "@${cutoff_epoch}" 2>/dev/null || date -r "${cutoff_epoch}" 2>/dev/null || echo "epoch ${cutoff_epoch}")
+    echo "Cutoff epoch: ${cutoff_epoch} (${cutoff_date_display})"
 
     echo "Checking branches..."
     for br in ${branches_to_process}; do
@@ -172,7 +174,7 @@ main() {
         fi
 
         # Convert commit date to epoch for comparison
-        commit_epoch=$(date -d "${commit_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "${commit_date}" +%s 2>/dev/null)
+        commit_epoch=$(date -d "${commit_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "${commit_date}" +%s 2>/dev/null || echo "")
 
         if [[ -z "${commit_epoch}" ]]; then
             echo "Error: Failed to parse commit date '${commit_date}' for branch ${br}. Skipping..."
@@ -220,7 +222,7 @@ main() {
             fi
 
             tag_date=$(echo "${commit_info}" | jq -r '.committer.date')
-            tag_epoch=$(date -d "${tag_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "${tag_date}" +%s 2>/dev/null)
+            tag_epoch=$(date -d "${tag_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "${tag_date}" +%s 2>/dev/null || echo "")
 
             if [[ -z "${tag_epoch}" ]]; then
                 echo "Warning: Failed to parse date '${tag_date}' for tag ${tag}, skipping..."
