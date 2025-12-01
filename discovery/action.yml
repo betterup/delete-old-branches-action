@@ -15,5 +15,5 @@ outputs:
     description: "JSON matrix configuration for parallel job execution"
 runs:
   using: "docker"
-  image: "Dockerfile"
+  image: "../Dockerfile"
   entrypoint: "/usr/bin/discover-branches"

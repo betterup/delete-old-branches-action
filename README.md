@@ -84,13 +84,10 @@ jobs:
     steps:
       - name: Discover branches
         id: discover
-        uses: docker://ghcr.io/betterup/delete-old-branches-action:latest
+        uses: betterup/delete-old-branches-action/discovery@v0.0.16
         with:
-          entrypoint: /usr/bin/discover-branches
-        env:
-          INPUT_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          INPUT_BATCH_SIZE: "100"  # Branches per batch
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          batch_size: "100"
 
   # Stage 2: Process branches in parallel
   process:
@@ -105,7 +102,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Delete stale branches (Batch ${{ matrix.batch }})
-        uses: betterup/delete-old-branches-action@main
+        uses: betterup/delete-old-branches-action@v0.0.16
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           date: "60 days ago"
@@ -117,7 +114,7 @@ jobs:
 
 ### Configuration Options
 
-- **`INPUT_BATCH_SIZE`**: Number of branches per batch (default: 100). Larger batches = fewer parallel jobs but longer per job.
+- **`batch_size`**: Number of branches per batch (default: 100). Larger batches = fewer parallel jobs but longer per job.
 - **`max-parallel`**: Maximum number of parallel worker jobs (default: 10). Higher values = faster but more resource usage.
 - **`branch_list`**: Space-separated list of branches to process in batch mode. Automatically set by the discovery job.
 

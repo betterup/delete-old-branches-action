@@ -34,16 +34,16 @@ Job 2: process (runs 10 in parallel, ~5 minutes each)
 
 ### Step 1: Update Your Action Version
 
-If you're using the action as a Docker container, use the latest version:
+Update to the latest version that includes parallelization support:
 
 ```yaml
-uses: docker://ghcr.io/betterup/delete-old-branches-action:latest
+uses: betterup/delete-old-branches-action@v0.0.16  # or later
 ```
 
-Or if referencing by tag:
+The discovery action is in a subdirectory:
 
 ```yaml
-uses: betterup/delete-old-branches-action@v0.0.16  # or latest version
+uses: betterup/delete-old-branches-action/discovery@v0.0.16
 ```
 
 ### Step 2: Replace Your Workflow File
@@ -93,13 +93,10 @@ jobs:
     steps:
       - name: Discover and batch branches
         id: discover
-        uses: docker://ghcr.io/betterup/delete-old-branches-action:latest
+        uses: betterup/delete-old-branches-action/discovery@v0.0.16
         with:
-          entrypoint: /usr/bin/discover-branches
-        env:
-          INPUT_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          INPUT_BATCH_SIZE: "100"
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          batch_size: "100"
 
   # Stage 2: Process in parallel
   process:
@@ -114,7 +111,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Delete stale branches (Batch ${{ matrix.batch }})
-        uses: betterup/delete-old-branches-action@main
+        uses: betterup/delete-old-branches-action@v0.0.16
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           date: "60 days ago"
@@ -164,7 +161,7 @@ Watch the first real run closely:
 **Recommended**: Start with 100, adjust based on your needs.
 
 ```yaml
-INPUT_BATCH_SIZE: "100"  # Default, good for most repos
+batch_size: "100"  # Default, good for most repos
 ```
 
 ### Adjusting Parallelism
@@ -197,11 +194,12 @@ If the parallelized workflow causes issues:
 
 ### Issue: Discovery job fails with "authentication failed"
 
-**Solution**: Ensure `INPUT_REPO_TOKEN` is set correctly:
+**Solution**: Ensure `repo_token` input is set correctly:
 
 ```yaml
-env:
-  INPUT_REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+uses: betterup/delete-old-branches-action/discovery@v0.0.16
+with:
+  repo_token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ### Issue: Worker jobs fail with "branch not found"
