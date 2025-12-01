@@ -35,6 +35,9 @@ inputs:
     description: "Exclude branches that have an open pull request"
     required: false
     default: true
+  branch_list:
+    description: "Space-separated list of specific branches to process (for batch mode). If not provided, all branches will be processed."
+    required: false
 outputs:
   was_dry_run:
     description: "Ran in dry-run mode so no branches were deleted"
