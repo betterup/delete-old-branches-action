@@ -115,6 +115,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Delete stale branches (Batch ${{ matrix.batch }})
+        id: delete
         uses: betterup/delete-old-branches-action@v0.0.16
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
@@ -127,8 +128,41 @@ jobs:
       - name: Report results
         if: always()
         run: |
-          echo "Batch ${{ matrix.batch }}: Processed ${{ matrix.count }} branches"
+          echo "✅ Batch ${{ matrix.batch }}: Processed ${{ matrix.count }} branches"
+          echo "Deleted branches (${{ steps.delete.outputs.deleted_count }}): ${{ steps.delete.outputs.deleted_branches }}"
+          echo "Branches with errors (${{ steps.delete.outputs.error_count }}): ${{ steps.delete.outputs.error_branches }}"
 ```
+
+### Understanding Action Outputs
+
+The delete action provides outputs that you can use in subsequent steps:
+
+| Output | Description | Example |
+|--------|-------------|---------|
+| `deleted_branches` | Space-separated list of deleted branch names | `feat/old-feature fix/bug-123` |
+| `deleted_count` | Number of branches successfully deleted | `2` |
+| `error_branches` | Space-separated list of branches with errors | `broken:no_sha` |
+| `error_count` | Number of branches that had errors | `1` |
+| `was_dry_run` | Whether the action ran in dry-run mode | `true` or `false` |
+
+**Example usage:**
+```yaml
+- name: Delete stale branches
+  id: delete
+  uses: betterup/delete-old-branches-action@v0.0.16
+  with:
+    repo_token: ${{ secrets.GITHUB_TOKEN }}
+    date: "60 days ago"
+    branch_list: ${{ matrix.branches }}
+
+- name: Report results
+  if: always()
+  run: |
+    echo "Deleted (${{ steps.delete.outputs.deleted_count }}): ${{ steps.delete.outputs.deleted_branches }}"
+    echo "Errors (${{ steps.delete.outputs.error_count }}): ${{ steps.delete.outputs.error_branches }}"
+```
+
+**Note:** You must add an `id` to the action step (e.g., `id: delete`) to reference its outputs using `steps.delete.outputs.*`.
 
 ### Step 3: Test in Dry-Run Mode First
 
