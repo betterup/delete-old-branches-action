@@ -49,13 +49,13 @@ for batch_file in batch_*; do
     rm "$batch_file"
 done
 
-# Output matrix for GitHub Actions
-matrix_json=$(jq -n --argjson include "$matrix_include" '{include: $include}')
+# Output matrix for GitHub Actions (compact JSON, single line)
+matrix_json=$(jq -nc --argjson include "$matrix_include" '{include: $include}')
 echo "matrix=${matrix_json}" >> "$GITHUB_OUTPUT"
 
 echo ""
 echo "====== DISCOVERY COMPLETE ======"
 echo "Total branches: ${total_branches}"
 echo "Total batches: ${num_batches}"
-echo "Matrix JSON:"
+echo "Matrix JSON (pretty):"
 echo "$matrix_json" | jq .
