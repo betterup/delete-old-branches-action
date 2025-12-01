@@ -117,46 +117,18 @@ delete_branch_or_tag() {
 }
 
 main() {
-    # fetch history etc
+    # No git fetch needed - we'll use GitHub API instead
     local sha
-    git config --global --add safe.directory "${GITHUB_WORKSPACE}"
-
-    # Configure git to use the GITHUB_TOKEN for authentication
-    # This is needed because the Docker container doesn't inherit the host's git credentials
-    git config --global url."https://x-access-token:${INPUT_REPO_TOKEN}@github.com/".insteadOf "https://github.com/"
 
     # Determine which branches to process
     local branches_to_process
     if [[ -n "${BRANCH_LIST}" ]]; then
         echo "Processing specific branch list (batch mode)..."
         branches_to_process="${BRANCH_LIST}"
-
-        # In batch mode, only fetch the specific branches we need
-        echo "Fetching ${branches_to_process} from remote..."
-        for br in ${branches_to_process}; do
-            echo "  Fetching branch: ${br}"
-            if ! git fetch --no-tags origin "refs/heads/${br}:refs/remotes/origin/${br}" 2>/dev/null; then
-                echo "  Warning: Failed to fetch ${br}, it may have been deleted"
-            fi
-        done
     else
         echo "Processing all branches (legacy mode)..."
-        # catch error for git fetch with --unshallow if complete repo clone
-        if ! git fetch --prune --unshallow --no-tags origin '+refs/heads/*:refs/remotes/origin/*'; then
-            echo "Error: Failed to fetch branches with --unshallow. This is likely because the repository is a complete clone."
-
-            echo "Re-fetching without --unshallow and without tags for speed..."
-            git fetch --prune --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
-        fi
-
-        # Get all branches from ls-remote
+        # Get all branches from ls-remote (no fetch needed, queries remote directly)
         branches_to_process=$(git ls-remote -q --heads --refs | sed "s@^.*heads/@@")
-    fi
-
-    # Only fetch tags if we need them for tag deletion
-    if [[ "${DELETE_TAGS}" == true ]]; then
-        echo "Fetching tags (required for tag deletion)..."
-        git fetch --prune --tags origin
     fi
 
     # Fetch all open PR branches once
@@ -172,43 +144,76 @@ main() {
     echo "Checking branches..."
     for br in ${branches_to_process}; do
 
-        # Check if branch exists in origin and has no recent commits
-        if ! git_log_output=$(git log --oneline -1 --since="${DATE}" "origin/${br}" 2>/dev/null); then
+        # Use GitHub API to get branch commit info (no git fetch needed)
+        echo "Checking branch: ${br}"
+        if ! branch_info=$(gh api "repos/${REPO}/branches/${br}" 2>/dev/null); then
             echo "Error: Branch ${br} does not exist in remote repository or cannot be accessed. Skipping..."
             error_branches+=("${br}:missing_or_inaccessible")
             continue
         fi
 
-        if [[ -z "${git_log_output}" ]]; then
-            # Get SHA for the branch, with error handling
-            if ! sha=$(git show-ref -s "origin/${br}" 2>/dev/null); then
-                echo "Error: Failed to fetch SHA for branch: ${br}. Branch may not exist in remote repository. Skipping..."
-                error_branches+=("${br}:no_sha")
-                continue
-            fi
-            if [[ -z "${sha}" ]]; then
-                echo "Error: Empty SHA for branch: ${br}. Skipping..."
-                error_branches+=("${br}:empty_sha")
-                continue
-            fi
+        # Extract commit date and SHA from API response
+        commit_date=$(echo "${branch_info}" | jq -r '.commit.commit.committer.date')
+        sha=$(echo "${branch_info}" | jq -r '.commit.sha')
+
+        if [[ -z "${sha}" || "${sha}" == "null" ]]; then
+            echo "Error: Failed to get SHA for branch: ${br}. Skipping..."
+            error_branches+=("${br}:no_sha")
+            continue
+        fi
+
+        # Convert DATE input to epoch for comparison
+        cutoff_epoch=$(date -d "${DATE}" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "${DATE}" +%s 2>/dev/null)
+        commit_epoch=$(date -d "${commit_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "${commit_date}" +%s 2>/dev/null)
+
+        # Check if branch is stale (commit is older than cutoff date)
+        if [[ ${commit_epoch} -lt ${cutoff_epoch} ]]; then
             default_branch_protected "${br}" && echo "branch: ${br} is a default branch. Won't delete it" && continue
             branch_protected "${br}" && echo "branch: ${br} is likely protected. Won't delete it" && continue
             extra_branch_or_tag_protected "${br}" "branch" && echo "branch: ${br} is explicitly protected and won't be deleted" && continue
             is_pr_open_on_branch "${br}" && echo "branch: ${br} has an open pull request and won't be deleted" && continue
             delete_branch_or_tag "${br}" "heads" "${sha}"
+        else
+            echo "branch: ${br} has recent commits (last commit: ${commit_date}), skipping"
         fi
     done
     if [[ "${DELETE_TAGS}" == true ]]; then
+        echo "Checking tags..."
         local tag_counter=1
-        for br in $(git ls-remote -q --tags --refs | sed "s@^.*tags/@@" | sort -Vr); do
-            if [[ -z "$(git log --oneline -1 --since="${DATE}" "${br}")" ]]; then
+
+        # Get all tags from ls-remote and sort in reverse version order
+        for tag in $(git ls-remote -q --tags --refs | sed "s@^.*tags/@@" | sort -Vr); do
+            echo "Checking tag: ${tag}"
+
+            # Use GitHub API to get tag commit info
+            if ! tag_info=$(gh api "repos/${REPO}/git/refs/tags/${tag}" 2>/dev/null); then
+                echo "Warning: Could not fetch info for tag ${tag}, skipping..."
+                continue
+            fi
+
+            # Get the commit SHA from the tag
+            tag_sha=$(echo "${tag_info}" | jq -r '.object.sha')
+
+            # Get commit info to check date
+            if ! commit_info=$(gh api "repos/${REPO}/git/commits/${tag_sha}" 2>/dev/null); then
+                echo "Warning: Could not fetch commit info for tag ${tag}, skipping..."
+                continue
+            fi
+
+            tag_date=$(echo "${commit_info}" | jq -r '.committer.date')
+            tag_epoch=$(date -d "${tag_date}" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "${tag_date}" +%s 2>/dev/null)
+
+            # Check if tag is stale
+            if [[ ${tag_epoch} -lt ${cutoff_epoch} ]]; then
                 if [[ ${tag_counter} -gt ${MINIMUM_TAGS} ]]; then
-                    extra_branch_or_tag_protected "${br}" "tag" && echo "tag: ${br} is explicitly protected and won't be deleted" && continue
-                    delete_branch_or_tag "${br}" "tags"
+                    extra_branch_or_tag_protected "${tag}" "tag" && echo "tag: ${tag} is explicitly protected and won't be deleted" && continue
+                    delete_branch_or_tag "${tag}" "tags" "${tag_sha}"
                 else
-                    echo "Not deleting tag ${br} due to minimum tag requirement(min: ${MINIMUM_TAGS})"
+                    echo "Not deleting tag ${tag} due to minimum tag requirement(min: ${MINIMUM_TAGS})"
                     ((tag_counter+=1))
                 fi
+            else
+                echo "tag: ${tag} has recent commits (date: ${tag_date}), skipping"
             fi
         done
     fi
