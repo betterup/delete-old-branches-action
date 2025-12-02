@@ -120,6 +120,10 @@ main() {
     # No git fetch needed - we'll use GitHub API instead
     local sha
 
+    # Configure git to use the GITHUB_TOKEN for authentication
+    # This is needed because the Docker container doesn't inherit the host's git credentials
+    git config --global url."https://x-access-token:${INPUT_REPO_TOKEN}@github.com/".insteadOf "https://github.com/"
+
     # Determine which branches to process
     local branches_to_process
     if [[ -n "${BRANCH_LIST}" ]]; then

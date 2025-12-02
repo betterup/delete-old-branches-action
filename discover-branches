@@ -14,6 +14,10 @@ EXCLUDE_OPEN_PR_BRANCHES=${INPUT_EXCLUDE_OPEN_PR_BRANCHES:-true}
 # used for GitHub CLI authentication
 export GITHUB_TOKEN=${INPUT_REPO_TOKEN}
 
+# Configure git to use the GITHUB_TOKEN for authentication
+# This is needed because the Docker container doesn't inherit the host's git credentials
+git config --global url."https://x-access-token:${INPUT_REPO_TOKEN}@github.com/".insteadOf "https://github.com/"
+
 echo "Discovering branches using git ls-remote (no fetch required)..."
 
 # Get all branch names using ls-remote (fast, no fetch needed)
