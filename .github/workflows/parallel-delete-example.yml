@@ -91,22 +91,26 @@ jobs:
           while IFS= read -r job_id; do
             job_logs=$(gh api "repos/${{ github.repository }}/actions/jobs/${job_id}/logs" 2>/dev/null || echo "")
 
-            # Extract deleted branches from log output and trim whitespace
-            deleted=$(echo "$job_logs" | grep -oP "Deleted branches \(\d+\): \K.*" | tr -d '\n\r')
-            deleted=$(echo "$deleted" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-            if [ -n "$deleted" ]; then
-              all_deleted="$all_deleted $deleted"
-              count=$(echo "$deleted" | wc -w | tr -d ' ')
-              total_deleted=$((total_deleted + count))
+            # Extract deleted branches - only process if count is non-zero
+            deleted_line=$(echo "$job_logs" | grep -o "Deleted branches ([0-9]*): .*" | tail -1)
+            if [[ "$deleted_line" =~ Deleted\ branches\ \(([0-9]+)\):\ (.*) ]]; then
+              count="${BASH_REMATCH[1]}"
+              branches="${BASH_REMATCH[2]}"
+              if [ "$count" -gt 0 ] && [ -n "$branches" ]; then
+                all_deleted="$all_deleted $branches"
+                total_deleted=$((total_deleted + count))
+              fi
             fi
 
-            # Extract error branches from log output and trim whitespace
-            errors=$(echo "$job_logs" | grep -oP "Branches with errors \(\d+\): \K.*" | tr -d '\n\r')
-            errors=$(echo "$errors" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-            if [ -n "$errors" ]; then
-              all_errors="$all_errors $errors"
-              count=$(echo "$errors" | wc -w | tr -d ' ')
-              total_errors=$((total_errors + count))
+            # Extract error branches - only process if count is non-zero
+            error_line=$(echo "$job_logs" | grep -o "Branches with errors ([0-9]*): .*" | tail -1)
+            if [[ "$error_line" =~ Branches\ with\ errors\ \(([0-9]+)\):\ (.*) ]]; then
+              count="${BASH_REMATCH[1]}"
+              branches="${BASH_REMATCH[2]}"
+              if [ "$count" -gt 0 ] && [ -n "$branches" ]; then
+                all_errors="$all_errors $branches"
+                total_errors=$((total_errors + count))
+              fi
             fi
           done < <(echo "$jobs_json" | jq -r '.[] | select(.name | startswith("process")) | .id')
 
