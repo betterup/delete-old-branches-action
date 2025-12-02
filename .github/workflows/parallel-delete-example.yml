@@ -91,16 +91,18 @@ jobs:
           while IFS= read -r job_id; do
             job_logs=$(gh api "repos/${{ github.repository }}/actions/jobs/${job_id}/logs" 2>/dev/null || echo "")
 
-            # Extract deleted branches from log output
-            deleted=$(echo "$job_logs" | grep -oP "Deleted branches \(\d+\): \K.*" | tr -d '\n\r' | xargs)
+            # Extract deleted branches from log output and trim whitespace
+            deleted=$(echo "$job_logs" | grep -oP "Deleted branches \(\d+\): \K.*" | tr -d '\n\r')
+            deleted=$(echo "$deleted" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
             if [ -n "$deleted" ]; then
               all_deleted="$all_deleted $deleted"
               count=$(echo "$deleted" | wc -w | tr -d ' ')
               total_deleted=$((total_deleted + count))
             fi
 
-            # Extract error branches from log output
-            errors=$(echo "$job_logs" | grep -oP "Branches with errors \(\d+\): \K.*" | tr -d '\n\r' | xargs)
+            # Extract error branches from log output and trim whitespace
+            errors=$(echo "$job_logs" | grep -oP "Branches with errors \(\d+\): \K.*" | tr -d '\n\r')
+            errors=$(echo "$errors" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
             if [ -n "$errors" ]; then
               all_errors="$all_errors $errors"
               count=$(echo "$errors" | wc -w | tr -d ' ')
