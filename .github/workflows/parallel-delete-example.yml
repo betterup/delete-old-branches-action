@@ -20,7 +20,7 @@ jobs:
     steps:
       - name: Discover branches and create batches
         id: discover
-        uses: betterup/delete-old-branches-action/discovery@v0.0.16
+        uses: betterup/delete-old-branches-action/discovery@v0.0.18
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           batch_size: "100"
@@ -48,7 +48,7 @@ jobs:
 
       - name: Delete stale branches (Batch ${{ matrix.batch }})
         id: delete
-        uses: betterup/delete-old-branches-action@v0.0.16
+        uses: betterup/delete-old-branches-action@v0.0.18
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           date: "60 days ago"
@@ -71,33 +71,62 @@ jobs:
     if: always()
     steps:
       - name: Aggregate and display results
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "## 🎯 Deletion Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
+          # Fetch all job results from the workflow run using GitHub API
+          run_id="${{ github.run_id }}"
 
-          # Collect all deleted branches from all jobs
-          deleted_branches="${{ join(needs.process.outputs.deleted_branches, ' ') }}"
-          deleted_count=$(echo "$deleted_branches" | wc -w | tr -d ' ')
+          # Get all jobs in this workflow run
+          jobs_json=$(gh api "repos/${{ github.repository }}/actions/runs/${run_id}/jobs" --jq '.jobs')
 
-          # Collect all error branches from all jobs
-          error_branches="${{ join(needs.process.outputs.error_branches, ' ') }}"
-          error_count=$(echo "$error_branches" | wc -w | tr -d ' ')
+          # Extract results from all "process" jobs (matrix jobs)
+          all_deleted=""
+          all_errors=""
+          total_deleted=0
+          total_errors=0
 
-          echo "### ✅ Successfully Deleted: $deleted_count" >> $GITHUB_STEP_SUMMARY
-          if [ "$deleted_count" -gt 0 ]; then
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-            echo "$deleted_branches" | tr ' ' '\n' >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "*No branches were deleted*" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "" >> $GITHUB_STEP_SUMMARY
+          # Parse job logs to extract deletion results
+          # Each process job reports: "Deleted branches (N): branch1 branch2..."
+          while IFS= read -r job_id; do
+            job_logs=$(gh api "repos/${{ github.repository }}/actions/jobs/${job_id}/logs" 2>/dev/null || echo "")
 
-          echo "### ❌ Errors: $error_count" >> $GITHUB_STEP_SUMMARY
-          if [ "$error_count" -gt 0 ]; then
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-            echo "$error_branches" | tr ' ' '\n' >> $GITHUB_STEP_SUMMARY
-            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "*No errors*" >> $GITHUB_STEP_SUMMARY
-          fi
+            # Extract deleted branches from log output
+            deleted=$(echo "$job_logs" | grep -oP "Deleted branches \(\d+\): \K.*" | tr -d '\n\r' | xargs)
+            if [ -n "$deleted" ]; then
+              all_deleted="$all_deleted $deleted"
+              count=$(echo "$deleted" | wc -w | tr -d ' ')
+              total_deleted=$((total_deleted + count))
+            fi
+
+            # Extract error branches from log output
+            errors=$(echo "$job_logs" | grep -oP "Branches with errors \(\d+\): \K.*" | tr -d '\n\r' | xargs)
+            if [ -n "$errors" ]; then
+              all_errors="$all_errors $errors"
+              count=$(echo "$errors" | wc -w | tr -d ' ')
+              total_errors=$((total_errors + count))
+            fi
+          done < <(echo "$jobs_json" | jq -r '.[] | select(.name | startswith("process")) | .id')
+
+          # Generate summary
+          {
+            echo "## 🎯 Deletion Summary"
+            echo ""
+            echo "### ✅ Successfully Deleted: $total_deleted"
+            if [ "$total_deleted" -gt 0 ]; then
+              echo '```'
+              echo "$all_deleted" | tr ' ' '\n' | sort -u
+              echo '```'
+            else
+              echo "*No branches were deleted*"
+            fi
+            echo ""
+            echo "### ❌ Errors: $total_errors"
+            if [ "$total_errors" -gt 0 ]; then
+              echo '```'
+              echo "$all_errors" | tr ' ' '\n' | sort -u
+              echo '```'
+            else
+              echo "*No errors*"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

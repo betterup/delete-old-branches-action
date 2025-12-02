@@ -37,13 +37,13 @@ Job 2: process (runs 10 in parallel, ~5 minutes each)
 Update to the latest version that includes parallelization support:
 
 ```yaml
-uses: betterup/delete-old-branches-action@v0.0.16  # or later
+uses: betterup/delete-old-branches-action@v0.0.18  # or later
 ```
 
 The discovery action is in a subdirectory:
 
 ```yaml
-uses: betterup/delete-old-branches-action/discovery@v0.0.16
+uses: betterup/delete-old-branches-action/discovery@v0.0.18
 ```
 
 ### Step 2: Replace Your Workflow File
@@ -93,7 +93,7 @@ jobs:
     steps:
       - name: Discover and batch branches
         id: discover
-        uses: betterup/delete-old-branches-action/discovery@v0.0.16
+        uses: betterup/delete-old-branches-action/discovery@v0.0.18
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           batch_size: "100"
@@ -116,7 +116,7 @@ jobs:
 
       - name: Delete stale branches (Batch ${{ matrix.batch }})
         id: delete
-        uses: betterup/delete-old-branches-action@v0.0.16
+        uses: betterup/delete-old-branches-action@v0.0.18
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           date: "60 days ago"
@@ -131,7 +131,89 @@ jobs:
           echo "✅ Batch ${{ matrix.batch }}: Processed ${{ matrix.count }} branches"
           echo "Deleted branches (${{ steps.delete.outputs.deleted_count }}): ${{ steps.delete.outputs.deleted_branches }}"
           echo "Branches with errors (${{ steps.delete.outputs.error_count }}): ${{ steps.delete.outputs.error_branches }}"
+
+  # Stage 3: Summary - Aggregate results from all batches
+  summary:
+    needs: process
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Aggregate and display results
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Fetch all job results from the workflow run using GitHub API
+          run_id="${{ github.run_id }}"
+
+          # Get all jobs in this workflow run
+          jobs_json=$(gh api "repos/${{ github.repository }}/actions/runs/${run_id}/jobs" --jq '.jobs')
+
+          # Extract results from all "process" jobs (matrix jobs)
+          all_deleted=""
+          all_errors=""
+          total_deleted=0
+          total_errors=0
+
+          # Parse job logs to extract deletion results
+          # Each process job reports: "Deleted branches (N): branch1 branch2..."
+          while IFS= read -r job_id; do
+            job_logs=$(gh api "repos/${{ github.repository }}/actions/jobs/${job_id}/logs" 2>/dev/null || echo "")
+
+            # Extract deleted branches from log output
+            deleted=$(echo "$job_logs" | grep -oP "Deleted branches \(\d+\): \K.*" | tr -d '\n\r' | xargs)
+            if [ -n "$deleted" ]; then
+              all_deleted="$all_deleted $deleted"
+              count=$(echo "$deleted" | wc -w | tr -d ' ')
+              total_deleted=$((total_deleted + count))
+            fi
+
+            # Extract error branches from log output
+            errors=$(echo "$job_logs" | grep -oP "Branches with errors \(\d+\): \K.*" | tr -d '\n\r' | xargs)
+            if [ -n "$errors" ]; then
+              all_errors="$all_errors $errors"
+              count=$(echo "$errors" | wc -w | tr -d ' ')
+              total_errors=$((total_errors + count))
+            fi
+          done < <(echo "$jobs_json" | jq -r '.[] | select(.name | startswith("process")) | .id')
+
+          # Generate summary
+          {
+            echo "## 🎯 Deletion Summary"
+            echo ""
+            echo "### ✅ Successfully Deleted: $total_deleted"
+            if [ "$total_deleted" -gt 0 ]; then
+              echo '```'
+              echo "$all_deleted" | tr ' ' '\n' | sort -u
+              echo '```'
+            else
+              echo "*No branches were deleted*"
+            fi
+            echo ""
+            echo "### ❌ Errors: $total_errors"
+            if [ "$total_errors" -gt 0 ]; then
+              echo '```'
+              echo "$all_errors" | tr ' ' '\n' | sort -u
+              echo '```'
+            else
+              echo "*No errors*"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 ```
+
+### Why Use GitHub API for Aggregation?
+
+The summary job uses the GitHub API to fetch and parse job logs instead of using `needs.process.outputs.*` because:
+
+1. **Matrix job outputs don't aggregate**: GitHub Actions doesn't provide a built-in way to collect outputs from all matrix job runs into a single array
+2. **Last value wins**: Using `needs.process.outputs.deleted_branches` only gives you the output from the last matrix job that completed, not all of them
+3. **Reliable aggregation**: Fetching job logs via API ensures you get results from all parallel batches
+
+The summary job:
+- Fetches all jobs in the current workflow run
+- Filters for jobs with names starting with "process" (the matrix jobs)
+- Parses each job's logs for the standardized output format
+- Aggregates all results and displays them in GitHub Step Summary
+- Uses `sort -u` to deduplicate branch names
 
 ### Understanding Action Outputs
 
@@ -149,7 +231,7 @@ The delete action provides outputs that you can use in subsequent steps:
 ```yaml
 - name: Delete stale branches
   id: delete
-  uses: betterup/delete-old-branches-action@v0.0.16
+  uses: betterup/delete-old-branches-action@v0.0.18
   with:
     repo_token: ${{ secrets.GITHUB_TOKEN }}
     date: "60 days ago"
@@ -261,7 +343,7 @@ If the parallelized workflow causes issues:
 **Solution**: Ensure `repo_token` input is set correctly:
 
 ```yaml
-uses: betterup/delete-old-branches-action/discovery@v0.0.16
+uses: betterup/delete-old-branches-action/discovery@v0.0.18
 with:
   repo_token: ${{ secrets.GITHUB_TOKEN }}
 ```
