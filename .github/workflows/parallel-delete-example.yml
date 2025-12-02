@@ -29,6 +29,11 @@ jobs:
   process:
     needs: discover
     runs-on: ubuntu-latest
+    outputs:
+      deleted_branches: ${{ steps.delete.outputs.deleted_branches }}
+      deleted_count: ${{ steps.delete.outputs.deleted_count }}
+      error_branches: ${{ steps.delete.outputs.error_branches }}
+      error_count: ${{ steps.delete.outputs.error_count }}
     # This job will run once for each batch
     strategy:
       # Allow up to 10 parallel jobs
@@ -42,6 +47,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Delete stale branches (Batch ${{ matrix.batch }})
+        id: delete
         uses: betterup/delete-old-branches-action@v0.0.16
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
@@ -54,4 +60,44 @@ jobs:
       - name: Report results for batch ${{ matrix.batch }}
         if: always()
         run: |
-          echo "Processed batch ${{ matrix.batch }} with ${{ matrix.count }} branches"
+          echo "✅ Batch ${{ matrix.batch }}: Processed ${{ matrix.count }} branches"
+          echo "Deleted branches (${{ steps.delete.outputs.deleted_count }}): ${{ steps.delete.outputs.deleted_branches }}"
+          echo "Branches with errors (${{ steps.delete.outputs.error_count }}): ${{ steps.delete.outputs.error_branches }}"
+
+  # Stage 3: Summary - Aggregate results from all batches
+  summary:
+    needs: process
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Aggregate and display results
+        run: |
+          echo "## 🎯 Deletion Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Collect all deleted branches from all jobs
+          deleted_branches="${{ join(needs.process.outputs.deleted_branches, ' ') }}"
+          deleted_count=$(echo "$deleted_branches" | wc -w | tr -d ' ')
+
+          # Collect all error branches from all jobs
+          error_branches="${{ join(needs.process.outputs.error_branches, ' ') }}"
+          error_count=$(echo "$error_branches" | wc -w | tr -d ' ')
+
+          echo "### ✅ Successfully Deleted: $deleted_count" >> $GITHUB_STEP_SUMMARY
+          if [ "$deleted_count" -gt 0 ]; then
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "$deleted_branches" | tr ' ' '\n' >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "*No branches were deleted*" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "### ❌ Errors: $error_count" >> $GITHUB_STEP_SUMMARY
+          if [ "$error_count" -gt 0 ]; then
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "$error_branches" | tr ' ' '\n' >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "*No errors*" >> $GITHUB_STEP_SUMMARY
+          fi

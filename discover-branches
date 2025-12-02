@@ -7,6 +7,9 @@ set -eo pipefail
 
 REPO="${GITHUB_REPOSITORY}"
 BATCH_SIZE=${INPUT_BATCH_SIZE}
+DEFAULT_BRANCHES=${INPUT_DEFAULT_BRANCHES:-main,master}
+EXCLUDE_BRANCH_REGEX=${INPUT_EXTRA_PROTECTED_BRANCH_REGEX:-^$}
+EXCLUDE_OPEN_PR_BRANCHES=${INPUT_EXCLUDE_OPEN_PR_BRANCHES:-true}
 
 # used for GitHub CLI authentication
 export GITHUB_TOKEN=${INPUT_REPO_TOKEN}
@@ -16,13 +19,105 @@ echo "Discovering branches using git ls-remote (no fetch required)..."
 # Get all branch names using ls-remote (fast, no fetch needed)
 # Use authentication token in URL for ls-remote
 echo "Fetching branch list from remote repository: ${REPO}..."
-branches=$(git ls-remote --heads --refs "https://x-access-token:${INPUT_REPO_TOKEN}@github.com/${REPO}.git" | sed 's@^.*heads/@@' | sort)
+all_branches=$(git ls-remote --heads --refs "https://x-access-token:${INPUT_REPO_TOKEN}@github.com/${REPO}.git" | sed 's@^.*heads/@@' | sort)
 
-total_branches=$(echo "$branches" | wc -l | tr -d ' ')
-echo "Found ${total_branches} branches"
+total_branches=$(echo "$all_branches" | wc -l | tr -d ' ')
+echo "Found ${total_branches} total branches"
 
-# Calculate number of batches needed
-num_batches=$(( (total_branches + BATCH_SIZE - 1) / BATCH_SIZE ))
+# Function to check if branch is a default branch
+default_branch_protected() {
+    local br=${1}
+    local default_branches
+    default_branches=$(echo "${DEFAULT_BRANCHES}" | tr "," "\n")
+
+    for default_branch in $default_branches; do
+        if [[ "${br}" == "${default_branch}" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Function to check if branch matches extra protected regex
+extra_branch_protected() {
+    local br=${1}
+    echo "${br}" | grep -qE "${EXCLUDE_BRANCH_REGEX}"
+    return $?
+}
+
+# Fetch open PR branches if needed
+if [[ "${EXCLUDE_OPEN_PR_BRANCHES}" == true ]]; then
+    echo "Fetching branches with open PRs..."
+    OPEN_PR_BRANCHES=$(gh api "repos/${REPO}/pulls" --jq '.[].head.ref' --paginate)
+    pr_count=$(echo "${OPEN_PR_BRANCHES}" | grep -c '^' || echo 0)
+    echo "Found ${pr_count} branches with open PRs"
+else
+    OPEN_PR_BRANCHES=""
+fi
+
+# Filter branches
+echo "Filtering out protected and ignored branches..."
+filtered_branches=""
+filtered_count=0
+default_branch_count=0
+regex_protected_count=0
+pr_branch_count=0
+
+for branch in $all_branches; do
+    # Check if it's a default branch
+    if default_branch_protected "${branch}"; then
+        echo "  Filtering out default branch: ${branch}"
+        ((default_branch_count+=1))
+        continue
+    fi
+
+    # Check if it matches the extra protected regex
+    if extra_branch_protected "${branch}"; then
+        echo "  Filtering out regex-protected branch: ${branch}"
+        ((regex_protected_count+=1))
+        continue
+    fi
+
+    # Check if it has an open PR
+    if [[ "${EXCLUDE_OPEN_PR_BRANCHES}" == true ]] && echo "${OPEN_PR_BRANCHES}" | grep -qx "${branch}"; then
+        echo "  Filtering out branch with open PR: ${branch}"
+        ((pr_branch_count+=1))
+        continue
+    fi
+
+    # Branch passed all filters
+    filtered_branches="${filtered_branches}${branch}
+"
+    ((filtered_count+=1))
+done
+
+branches="${filtered_branches}"
+
+echo ""
+echo "====== FILTERING SUMMARY ======"
+echo "Total branches: ${total_branches}"
+echo "Filtered out:"
+echo "  - Default branches: ${default_branch_count}"
+echo "  - Regex-protected branches: ${regex_protected_count}"
+echo "  - Branches with open PRs: ${pr_branch_count}"
+echo "Remaining branches to process: ${filtered_count}"
+echo ""
+
+# Check if there are any branches left to process
+if [[ ${filtered_count} -eq 0 ]]; then
+    echo "No branches to process after filtering. Creating empty matrix."
+    matrix_json='{"include":[]}'
+    echo "matrix=${matrix_json}" >> "$GITHUB_OUTPUT"
+    echo ""
+    echo "====== DISCOVERY COMPLETE ======"
+    echo "Total branches found: ${total_branches}"
+    echo "Branches after filtering: ${filtered_count}"
+    echo "Total batches: 0"
+    exit 0
+fi
+
+# Calculate number of batches needed based on filtered count
+num_batches=$(( (filtered_count + BATCH_SIZE - 1) / BATCH_SIZE ))
 echo "Will create ${num_batches} batches of up to ${BATCH_SIZE} branches each"
 
 # Create batches and build matrix JSON
@@ -55,7 +150,8 @@ echo "matrix=${matrix_json}" >> "$GITHUB_OUTPUT"
 
 echo ""
 echo "====== DISCOVERY COMPLETE ======"
-echo "Total branches: ${total_branches}"
+echo "Total branches found: ${total_branches}"
+echo "Branches after filtering: ${filtered_count}"
 echo "Total batches: ${num_batches}"
 echo "Matrix JSON (pretty):"
 echo "$matrix_json" | jq .
