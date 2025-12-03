@@ -2,9 +2,9 @@ name: Delete Stale Branches (Parallelized)
 
 on:
   workflow_dispatch:
-  schedule:
+  # schedule:
     # Runs nightly at 2:30 AM UTC
-    - cron: '30 2 * * *'
+    # - cron: '30 2 * * *'
 
 # Allow only one concurrent run to avoid conflicts
 concurrency:
