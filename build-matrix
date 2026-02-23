@@ -1,0 +1,101 @@
+#!/bin/bash
+#
+# build-matrix: Read a newline-delimited branch list from stdin, split into
+# batches, and emit a GitHub Actions strategy matrix JSON.
+#
+# Usage:
+#   echo "$branch_list" | build-matrix [--batch-size N]
+#   build-matrix --batch-size 50 < branches.txt
+#
+# Output:
+#   Writes `matrix=<json>` to $GITHUB_OUTPUT (if set), and always prints
+#   the matrix JSON + a human-readable summary to stdout.
+#
+# Exit codes:
+#   0  success
+
+set -eo pipefail
+
+BATCH_SIZE=100
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --batch-size)
+            BATCH_SIZE="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            exit 1
+            ;;
+    esac
+done
+
+# Read branch list from stdin, stripping blank lines and trailing whitespace
+branches=$(sed '/^[[:space:]]*$/d' | sed 's/[[:space:]]*$//')
+
+filtered_count=$(printf '%s\n' "$branches" | grep -c '.' || true)
+
+echo ""
+echo "====== BATCH SUMMARY ======"
+echo "Branches to batch: ${filtered_count}"
+
+if [[ ${filtered_count} -eq 0 ]]; then
+    echo "No branches to process. Creating empty matrix."
+    matrix_json='{"include":[]}'
+
+    if [[ -n "${GITHUB_OUTPUT}" ]]; then
+        echo "matrix=${matrix_json}" >> "$GITHUB_OUTPUT"
+    fi
+
+    echo ""
+    echo "====== BUILD MATRIX COMPLETE ======"
+    echo "Total batches: 0"
+    echo "Matrix JSON (pretty):"
+    echo "$matrix_json" | jq .
+    exit 0
+fi
+
+num_batches=$(( (filtered_count + BATCH_SIZE - 1) / BATCH_SIZE ))
+echo "Will create ${num_batches} batches of up to ${BATCH_SIZE} branches each"
+
+# Split into batch files using printf to avoid adding extra trailing newlines
+matrix_include='[]'
+batch_num=0
+
+printf '%s\n' "$branches" | split -l "${BATCH_SIZE}" - _batch_
+
+for batch_file in _batch_*; do
+    batch_branches=$(tr '\n' ' ' < "$batch_file" | sed 's/ $//')
+    branch_count=$(grep -c '.' "$batch_file" || true)
+
+    # Skip empty batch files (defensive guard)
+    if [[ ${branch_count} -eq 0 ]]; then
+        rm "$batch_file"
+        continue
+    fi
+
+    batch_json=$(jq -n \
+        --arg batch "$batch_num" \
+        --arg branches "$batch_branches" \
+        --arg count "$branch_count" \
+        '{batch: $batch, branches: $branches, count: ($count | tonumber)}')
+
+    matrix_include=$(echo "$matrix_include" | jq --argjson item "$batch_json" '. += [$item]')
+
+    echo "Batch ${batch_num}: ${branch_count} branches"
+    batch_num=$((batch_num + 1))
+    rm "$batch_file"
+done
+
+matrix_json=$(jq -nc --argjson include "$matrix_include" '{include: $include}')
+
+if [[ -n "${GITHUB_OUTPUT}" ]]; then
+    echo "matrix=${matrix_json}" >> "$GITHUB_OUTPUT"
+fi
+
+echo ""
+echo "====== BUILD MATRIX COMPLETE ======"
+echo "Total batches: ${batch_num}"
+echo "Matrix JSON (pretty):"
+echo "$matrix_json" | jq .
