@@ -105,63 +105,12 @@ echo "  - Default branches: ${default_branch_count}"
 echo "  - Regex-protected branches: ${regex_protected_count}"
 echo "  - Branches with open PRs: ${pr_branch_count}"
 echo "Remaining branches to process: ${filtered_count}"
-echo ""
 
-# Check if there are any branches left to process
-if [[ ${filtered_count} -eq 0 ]]; then
-    echo "No branches to process after filtering. Creating empty matrix."
-    matrix_json='{"include":[]}'
-    echo "matrix=${matrix_json}" >> "$GITHUB_OUTPUT"
-    echo ""
-    echo "====== DISCOVERY COMPLETE ======"
-    echo "Total branches found: ${total_branches}"
-    echo "Branches after filtering: ${filtered_count}"
-    echo "Total batches: 0"
-    exit 0
-fi
-
-# Calculate number of batches needed based on filtered count
-num_batches=$(( (filtered_count + BATCH_SIZE - 1) / BATCH_SIZE ))
-echo "Will create ${num_batches} batches of up to ${BATCH_SIZE} branches each"
-
-# Create batches and build matrix JSON
-matrix_include='[]'
-batch_num=0
-
-printf '%s' "$branches" | split -l "${BATCH_SIZE}" - batch_
-for batch_file in batch_*; do
-    batch_branches=$(cat "$batch_file" | tr '\n' ' ' | sed 's/ $//')
-    branch_count=$(cat "$batch_file" | grep -c '.' || true)
-
-    # Skip empty batch files (can occur due to trailing newlines in branch list)
-    if [[ ${branch_count} -eq 0 ]]; then
-        rm "$batch_file"
-        continue
-    fi
-
-    # Create JSON object for this batch
-    batch_json=$(jq -n \
-        --arg batch "$batch_num" \
-        --arg branches "$batch_branches" \
-        --arg count "$branch_count" \
-        '{batch: $batch, branches: $branches, count: ($count | tonumber)}')
-
-    # Add to matrix
-    matrix_include=$(echo "$matrix_include" | jq --argjson item "$batch_json" '. += [$item]')
-
-    echo "Batch ${batch_num}: ${branch_count} branches"
-    batch_num=$((batch_num + 1))
-    rm "$batch_file"
-done
-
-# Output matrix for GitHub Actions (compact JSON, single line)
-matrix_json=$(jq -nc --argjson include "$matrix_include" '{include: $include}')
-echo "matrix=${matrix_json}" >> "$GITHUB_OUTPUT"
+# Delegate batch building to build-matrix
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+echo "$branches" | "${SCRIPT_DIR}/build-matrix" --batch-size "${BATCH_SIZE}"
 
 echo ""
 echo "====== DISCOVERY COMPLETE ======"
 echo "Total branches found: ${total_branches}"
 echo "Branches after filtering: ${filtered_count}"
-echo "Total batches: ${num_batches}"
-echo "Matrix JSON (pretty):"
-echo "$matrix_json" | jq .
