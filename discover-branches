@@ -128,10 +128,16 @@ echo "Will create ${num_batches} batches of up to ${BATCH_SIZE} branches each"
 matrix_include='[]'
 batch_num=0
 
-echo "$branches" | split -l "${BATCH_SIZE}" - batch_
+printf '%s' "$branches" | split -l "${BATCH_SIZE}" - batch_
 for batch_file in batch_*; do
     batch_branches=$(cat "$batch_file" | tr '\n' ' ' | sed 's/ $//')
-    branch_count=$(cat "$batch_file" | wc -l | tr -d ' ')
+    branch_count=$(cat "$batch_file" | grep -c '.' || true)
+
+    # Skip empty batch files (can occur due to trailing newlines in branch list)
+    if [[ ${branch_count} -eq 0 ]]; then
+        rm "$batch_file"
+        continue
+    fi
 
     # Create JSON object for this batch
     batch_json=$(jq -n \
