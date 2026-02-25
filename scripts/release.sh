@@ -24,6 +24,13 @@ semver_parts() {
   echo "$major" "$minor" "$patch"
 }
 
+# Returns the floating major tag for a given semver tag, e.g. v1.2.3 -> v1
+floating_tag() {
+  local major
+  major=$(semver_parts "$1" | awk '{print $1}')
+  echo "v${major}"
+}
+
 bump_version() {
   local base="$1" bump="$2"
   read -r major minor patch <<< "$(semver_parts "$base")"
@@ -261,4 +268,28 @@ RELEASE_URL=$(gh release create "$NEW_TAG" \
 echo
 green "Release created successfully!"
 info "URL: $RELEASE_URL"
+echo
+
+# ─── Update floating major tag ────────────────────────────────────────────────
+
+FLOAT_TAG=$(floating_tag "$NEW_TAG")
+
+if git rev-parse "$FLOAT_TAG" >/dev/null 2>&1; then
+  FLOAT_CURRENT=$(git rev-parse "$FLOAT_TAG^{}")
+  bold "Floating tag '$FLOAT_TAG' currently points to: $FLOAT_CURRENT"
+  info "It will be moved to: $CURRENT_SHA (HEAD)"
+else
+  bold "Floating tag '$FLOAT_TAG' does not exist yet and will be created."
+fi
+
+read -rp "Update floating tag '$FLOAT_TAG' to point to '$NEW_TAG' (HEAD)? [Y/n]: " update_float
+if [[ ! "$update_float" =~ ^[Nn]$ ]]; then
+  # Force-update the local tag (create or move)
+  git tag -fa "$FLOAT_TAG" -m "Floating tag for latest ${FLOAT_TAG}.x.x release"
+  # Force-push to remote
+  git push origin "$FLOAT_TAG" --force
+  green "Floating tag '$FLOAT_TAG' updated and pushed."
+else
+  yellow "Skipped updating floating tag '$FLOAT_TAG'."
+fi
 echo
